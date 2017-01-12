@@ -1,0 +1,942 @@
+---
+title: "Project Part2 Report"
+author: "YiweiYan"
+date: "November 30, 2016"
+output: pdf_document
+---
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE)
+#knitr::opts_chunk$set(fig.width = 6, fig.height = 3.8)
+knitr::opts_chunk$set(out.width='265px', dpi=40)
+```
+
+# PREPAREATION
+
+This report is the second part of OMS DATA Project that aim to investigate the relationship between the movie descriptors and the success of movies. In Part 1, we did the data preparation and basic data analysis. In part 2, we are going to evaluate the linear regressions to predict the profit based on suitable variables.
+
+Before building models, we prepare the raw data as listed steps below firstly:
+
+(1) Omit all rows in which gross and budget are not available;
+
+(2) Remove all movies released prior to year 2000.
+
+```{r, warning=FALSE}
+# listed librarys for this project
+library(ggplot2)      
+library(lubridate)
+library(GGally)
+library(corrplot)
+library(tidyr)
+library(reshape2)
+library(formattable)
+library(glmnet)
+```
+
+```{r, warning=FALSE}
+# Part 1: Clean data
+# Load the raw dataset:
+setwd('/Users/yywxenia/Desktop/Fall2016/6242_DataVisual/HWs/Project1')
+load('movies_merged')
+# dim(movies_merged)         # Its dimention is (40789, 39)
+
+# Omit all rows in which gross and budget are not available (NAs):
+nona_movies = movies_merged[complete.cases(movies_merged$Gross),]
+nona_movies = nona_movies[complete.cases(nona_movies$Budget),]
+
+# Remove all movies released prior to 2000:
+# Only keep the matched data, again move NAs from Released:
+# sum(is.na(nona_movies$Year))        # Year has no NAs
+# sum(is.na(nona_movies$Released))    # Release has 50 NAs, we donot need to remove NAs
+nona_movies$Released2 = as.double(format(nona_movies$Released, "%Y")) 
+year_movies = nona_movies[complete.cases(nona_movies$Released2),]
+year_movies = year_movies[year_movies$Year > 2000, ]
+dim (year_movies)
+```
+
+# QUESTION 1:
+
+Question 1 asks to use linear regression to predict profit based on all available numeric variables. Then, graph the train and test MSE as a function of the train set size (averaged over random data partitions).
+
+### 1. Compute MSE:
+We create functions **mse()** and **test_mse()** for computing MSE values as shown below, which can benefit our later analysis for linear regression. The function for computing mse is basically the **mean(residuals^2)**.
+
+```{r,warning=FALSE}
+# Write function for Computing MSE
+mse = function(fit_results){
+  return (mean(fit_results$residuals^2))      
+} 
+
+# Write function for Computing test-MSE
+test_mse = function(model, test_data){
+  testX = test_data[, !(colnames(test_data) %in% c("PROFIT"))] 
+  testY = test_data$PROFIT
+  pred_test = predict(model, testX)
+  #return (mean( (testY - predict(model, testX))^2 ))
+  endpoints = data.frame(testY, pred_test)
+  endpoints = endpoints[complete.cases(endpoints),]   
+  return (mean((endpoints[,1] - endpoints[,2])^2))
+}
+```
+
+### 2. Dependent variable and numerical independent variables:
+
+```{r, warning=FALSE}
+#str(year_movies)
+sapply(year_movies, is.numeric)
+```
+
+(1) For the dependent value "PROFIT", in the original dataframe, we do not have a directly column for profit but only **Gross** and **Budget**. Therefore, we make a new column to our dataframe named **PROFIT** that comes from "Profit = Gross-Budget". Then, we remove column **Gross** and **Domestic_Gross** from database.
+
+(2) As we can see from the abave summary, the numerical variables not include **Runtime**, **Metascore** and **Awards**. Since these three columns present "numerical values" in a non-numerical way, we transfer them into num data format and treat them as numerical variables as well.
+
+(3) For analyzing the explanatory numerical variables of PROFIT, we also exclude date columns **Year**, **Date** and **Released**.
+
+```{r,warning=FALSE}
+# (1) Use linear regression to predict profit based on ALL available numeric variables.
+# Ignore "Domestric_Gross" and "Gross" as explanatory variables. Profit = Gross-Budget.
+year_movies$PROFIT = (year_movies$Gross-year_movies$Budget)
+year_movies = year_movies[, !(colnames(year_movies) %in% c("Gross", "Domestic_Gross"))] 
+
+# Metascore is str (present "number"). So firstly we transfer it to be num:
+year_movies  = year_movies[complete.cases(year_movies$Metascore),]   
+year_movies$Metascore = as.numeric(as.character(year_movies$Metascore))
+
+# Runtime could be see as numerical as well:
+year_movies$Runtime = (gsub("\\D", "", year_movies$Runtime))
+year_movies$Runtime = as.numeric(year_movies$Runtime)
+
+# Awards, we treat the sum of awards as a numeric column:
+year_movies$Awards[year_movies$Awards == "N/A"] = NA   
+year_movies$Awards[is.na(year_movies$Awards)] = 0
+for (r in c(1:length(year_movies$Awards))){
+  year_movies$TotalAwards[r] = 
+    sum(as.numeric(unique(unlist(regmatches(year_movies$Awards[r], 
+                                            gregexpr("[0-9]+", year_movies$Awards[r]))))))
+}
+nums = sapply(year_movies, is.numeric)              # available numeric variables
+num_movies = year_movies[ , nums]
+num_movies = num_movies[complete.cases(num_movies),]# remove NA rows
+
+# Make sure everything is numeric:
+for(i in seq(ncol(num_movies))) {
+  num_movies[,i] = as.numeric(as.character(num_movies[,i]))
+}
+
+### ignore "Year", "Date" and "Released2" that are all time variable :
+num_movies = num_movies[, !(colnames(num_movies) %in% c("Year", "Date", "Released2"))] 
+```
+
+Below we listed allthe numerical variables that we will use for the QUESTION 1 linear regression modeling. The dataframe used is **num_movies**:
+
+```{r, warning=FALSE}
+colnames(num_movies)
+dim(num_movies)
+```
+
+### 3. Model base linear regression 
+
+The steps of modeling our first basic linear regression model for profit based on all numerical variables are as follows:
+
+(1)  We randomly shuffle the **num_movies** dataframe, and divide the data into two sets from 5% to 95% for training data, and the rest for testing data.
+
+(2) On one data splitting, we compute the MSE values on the training and testing data, and compute the average MSE based on 50 times random shuffling and computing;
+
+(3) Repeat the computing on different proportions as described in step (1).
+
+(4) Plot the averaged training and testing MSEs  as shown in Figure 1.
+
+The results shown in Figure 1 are treated as a **base standard**. In the next QUESTION 2, we are going to improve our model in order to lower the base MSE values in Figure 1.
+
+```{r,warning=FALSE}
+# Specifically, we define the dependent variable "profit" as "Gross revenue - budget".
+counts = 1
+splits = c(1:19)
+percents = seq(0.05,0.95,0.05)
+lr1_split = matrix(1:38, 19)
+
+for (s in seq(0.05,0.95,0.05)){
+  temp = matrix(1:20, 10)
+  mse1 = 0
+  mse2 = 0
+  # Iterate 50 times innerly:
+  for(iter in 1:50){
+    shufdata = num_movies[sample(nrow(num_movies)),] #Shuffle results will change 
+    index_test = seq(1, nrow(shufdata)*s)            #Shuffle index results
+    train = shufdata[index_test, ]
+    test = shufdata[-index_test, ]
+    
+    LR1 = lm(PROFIT ~ Runtime + Metascore + imdbRating + imdbVotes + 
+               tomatoMeter + tomatoRating + tomatoReviews + tomatoFresh + 
+               tomatoRotten + tomatoUserMeter + tomatoUserRating + 
+               tomatoUserReviews + TotalAwards + Budget, data = train)
+    trainMse = mse(LR1)
+    mse1 = mse1 + mse(LR1)
+    mse2 = mse2 + test_mse(LR1, test)
+  }
+  lr1_split[counts, 1] = mse1/50
+  lr1_split[counts, 2] = mse2/50
+  counts = counts + 1
+}
+lr1_split  = cbind(lr1_split , percents)
+colnames(lr1_split) = c("train_mse","test_mse","splitting")
+print (lr1_split)
+
+# Graph the base train and test MSE as a function of the train set size.
+graph1 = data.frame(train = lr1_split[,1], test = lr1_split[,2],
+                    sampling = lr1_split[,3])
+graph1 %>% gather(key, MSE, train, test) %>%
+  ggplot(aes(x=sampling, y=MSE, colour=key)) +
+  geom_line()+theme_bw()+
+  ggtitle("Figure 1: (BASE) MSE with diff partitions") + 
+  labs(x="Train Sampling",y="train & test MSE")
+
+summary(LR1)
+```
+
+# QUESTION 2
+
+For this section, we are trying to improve our prediction quality in QUESTION 1 by adding feature transformations (log, binning, intersection, etc.) of those numeric variables. Similarly as in the former section, after selecting a satisfied model, we will plot the average train and test MSEs from the improved model and compare them with the base MSEs from the simple linear regression model.
+
+## 1. Understand the data relationships:
+
+(1) As we know, If 60% or more of the selected reviews are FRESH, then the movie receives as a "FRESH" rating. 
+
+So "tomatoMeter = tomatoFresh/tomatoReviews". First of all, we removed column **tomatoRotten** from dataframe.  Because in original model summary, it did not has estimated coefficient and other values since it is highly related to other variables. There are many correlationships among rating variables. In order to better understanding, we create a correlation tables among all variables related to ratings. 
+
+
+```{r,warning=FALSE}
+Q2num = num_movies[, !(colnames(num_movies) %in% c("tomatoRotten"))] 
+Q2num = Q2num[,c(1:12,14,13)] 
+
+# Generate a table to compare the correlation values among variables:
+temp = num_movies[, (colnames(num_movies) %in% c("tomatoRating", "tomatoMeter", 
+                                                  "tomatoFresh","tomatoReviews",
+                                                  "tomatoUserRating","tomatoUserMeter", 
+                                                  "tomatoUserReviews", "imdbRating", 
+                                               "imdbVotes"))] 
+correlationship = matrix(0, nrow = 9, ncol = 9)
+rownames(correlationship) = paste(colnames(temp), 1:9)
+colnames(correlationship) = paste(colnames(temp), 1:9)
+for (t in 1:(ncol(temp))) {
+  for (tt in 1:(ncol(temp))){
+    correlationship[tt, t] = cor(temp[,t], temp[,tt])
+    }
+}
+print (formattable(correlationship, digits = 2, format = "f"))
+
+```
+
+(2) Moreover, we compute the correlations of power-transfered variables, and log-transfered variables with PROFIT. For power transfermation, we limited our exploration from 1 to 3.
+
+(3) The information in the two tables could give us a first clue on what type of transfermations of which variables are more highly correlated with PROFIT. Also, we create binning **TotalAwards** column as discrete binary value columns **ManyAwards**, **SomeAwards**, **NoneAwards** to prepare for modeling.
+
+```{r, warning=FALSE}
+# Polynomial transformation correlation with PROFIT:
+selected_trans = c(0,0,0,0,0,0,0,0,0,0,0,0,0)
+variables_corr = c(0,0,0,0,0,0,0,0,0,0,0,0,0)
+for (var in 1:(ncol(Q2num)-1)) {
+  power_corr = c(0,0,0,0) 
+  selected_trans[var] = 0
+  for (pow in 1:3) {
+    power_corr[pow] = cor(Q2num$PROFIT, Q2num[, var]^(4-pow))
+  }
+  for (c in power_corr){
+    selected_trans[var] = 4-which.max(abs(power_corr))
+    variables_corr[var] = cor(Q2num$PROFIT, Q2num[, var]^selected_trans[var])
+  }
+}
+
+log_corr2 = c(0,0,0,0,0,0,0,0,0,0,0,0,0)
+for (var in 1:(ncol(Q2num)-1)) {
+  log_corr2[var] = cor(Q2num$PROFIT, log(Q2num[,var]))
+}
+
+power_table = matrix(1:39, 13)
+power_table[, 1] = colnames(Q2num[,1:13])
+power_table[, 2] = variables_corr
+power_table[, 3] = selected_trans
+power_table = cbind(power_table, log_corr2)
+# power_table = cbind(power_table, log_corr)
+colnames(power_table) = c("Variables","PowerV-Profit","Best-Power" ,
+                          "LogV-Profit")
+
+###################################
+## binning tranformation: Awards
+Q2num$TotalAwards[Q2num$TotalAwards == "N/A"] = NA   
+Q2num$TotalAwards[is.na(Q2num$TotalAwards)] = 0
+Q2num$NoneAwards = 0
+Q2num$SomeAwards = 0
+Q2num$ManyAwards = 0
+
+for (r in c(1:length(Q2num$TotalAwards))){
+  h = sum(as.numeric(unique(unlist(
+    regmatches(Q2num$TotalAwards[r], gregexpr("[0-9]+", Q2num$TotalAwards[r]))))))
+  if (h==0){
+    Q2num$NoneAwards[r] = 1
+  } else if (1<= h && h <=5){
+    Q2num$SomeAwards[r] = 1
+  } else if(h >5){
+    Q2num$ManyAwards[r] = 1
+  }
+}
+
+print (as.data.frame(power_table))
+```
+
+## 2. Try and build improved model:
+
+#### Build model on domain knowledge
+
+(1) Firstly, we try to add non-linear futures to the basic model on the above information picks. 
+
+In addition to include the power and log transformation futures, it worths to try to add more intersections like "imdbRating\*imdbVotes", "tomatoRating\*tomamtoReview"", and create a new model as shown below **LR2**.
+
+```{r, warning=FALSE}
+#Q2num =Q2num[, !(colnames(Q2num) %in% c("TotalAwards"))] 
+
+# try add non-linear features (model LR2)
+LR2 = lm(PROFIT ~ I(Runtime^3) + imdbRating*imdbVotes + 
+           tomatoRating*tomatoReviews + I(tomatoReviews^3) +
+           tomatoUserRating*tomatoUserReviews + I(Budget^2)+
+           ManyAwards, data = Q2num)
+mse(LR2)-mse(LR1)
+summary(LR2)
+
+# New model performance:
+counts = 1
+splits = c(1:19)
+percents = seq(0.05,0.95,0.05)
+lr2_split = matrix(1:38, 19)
+
+for (s in seq(0.05,0.95,0.05)){
+  temp2 = matrix(1:20, 10)
+  mse1 = 0
+  mse2 = 0
+  # Iterate 50 times innerly:
+  for(iter in 1:50){
+    shufdata = Q2num[sample(nrow(Q2num)),] #Shuffle results will change 
+    index_test = seq(1, nrow(shufdata)*s)            #Shuffle index results
+    train2 = shufdata[index_test, ]
+    test2 = shufdata[-index_test, ]
+    LR2 = lm(PROFIT ~ I(Runtime^3) + imdbRating*imdbVotes + 
+           tomatoRating*tomatoReviews + I(tomatoReviews^3) +
+           tomatoUserRating*tomatoUserReviews + I(Budget^2)+
+           ManyAwards, data = train2)
+    
+    trainMse = mse(LR2)
+    mse1 = mse1 + mse(LR2)
+    mse2 = mse2 + test_mse(LR2, test2)
+  }
+  lr2_split[counts, 1] = mse1/50
+  lr2_split[counts, 2] = mse2/50
+  counts = counts + 1
+}
+lr2_split  = cbind(lr2_split , percents)
+colnames(lr2_split) = c("train_mse","test_mse","splitting")
+
+graph2 = data.frame(baseTrainMse=lr1_split[,1], baseTestMse=lr1_split[,2], 
+                    trainMse = lr2_split[,1], testMse = lr2_split[,2], 
+                    sampling = lr2_split[,3])
+
+graph2 %>% gather(key, MSE, baseTrainMse, baseTestMse, trainMse, testMse) %>%
+  ggplot(aes(x=sampling, y=MSE, colour=key)) +
+  ylim(7e+15, 2.6e+16)+
+  geom_line()+theme_bw()+
+  ggtitle("Figure 2: (Improved) MSE with diff partitions") + 
+  labs(x="Train Sampling",y="train & test MSE")
+
+print (graph2)
+```
+
+#### Modify model by LASSO selection
+
+(2) Lasso is a regression analysis method that can perform both variable selection and regularization in order to enhance the prediction accuracy and interpretability of model it produces. 
+
+Before we finalize our model, we want to try the **lasso** on all original features and log/polynomial transformation features we created in the former dataframe **Q2new** to see if we could find some more intresting modifications for the improved model we created before. This practice can help understand the Lasso method and also for suppport or comparision with our former model. The detailed steps are described:
+
+```{r, warning=FALSE}
+# Add all polynomials and power variables into dataframe for trying Lasso
+Q2new = Q2num
+logs = Q2new[, !(colnames(Q2new) %in% c("PROFIT", "NoneAwards", 
+                                        "SomeAwards", "ManyAwards",
+                                       "tomatoMeter","TomatoFresh"))] 
+Q2new = Q2num
+poly = Q2new[, !(colnames(Q2new) %in% c("PROFIT", "NoneAwards", "SomeAwards", 
+                                        "ManyAwards"))] 
+
+# Add logs coloumns to dataframe  (col 17:28): 
+for (col in 1:ncol(logs)){
+  Q2new[,paste0(colnames(logs[col]), 'Log')] = log(logs[, col])
+}
+# Add polynominals to dataframe (col 28:40): 
+for (col2 in 1:(ncol(poly))){
+  Q2new[,paste0(colnames(poly[col2]), '^2')] = (Q2new[, col2])^2
+}
+# (col 40:52):
+for (col3 in 1:(ncol(poly))){
+  Q2new[,paste0(colnames(poly[col3]), '^3')] = (Q2new[, col3])^3
+}
+# put PROfIT at last column
+Q2new = Q2new[,c(1:13, 15:52, 14)]   
+
+# All created non-linear variables:
+colnames(Q2new)
+
+################################################
+# Try LASSO for selecting features:
+# Adress 0 /Inf values:
+Q2new = do.call(data.frame,lapply(Q2new, function(x) replace(x, is.infinite(x), 0)))
+Q2new = Q2new[apply(Q2new, 1, function(x) !all(x!=0)),]
+shufdata = Q2new[sample(nrow(Q2new)),]   
+index_test = seq(1, nrow(shufdata)*0.3)  
+
+# Train data
+train = shufdata[index_test, ]
+trainX = as.matrix(train[!(names(train) %in% c("PROFIT", "NoneAwards", 
+                                               "SomeAwards","ManyAwards"))])
+trainY = train$PROFIT
+# Test data
+test = shufdata[-index_test, ]
+testX = as.matrix(test[!(names(test) %in% c("PROFIT", "NoneAwards", 
+                                               "SomeAwards","ManyAwards"))])
+testY = test$PROFIT
+    
+# Select good lambda
+lassoCV = cv.glmnet(trainX, y=trainY, alpha = 1, nfold = 5, family = "gaussian", 
+                  type.measure = 'mse')
+predY = predict(lassoCV, newx=testX, lambda ='lambda.min')
+lasso_mse = mean((predY - testY)^2)
+```
+
+We compute the difference of mse values of test lasso_mse with our improved model test mse. We used the same split parition with 30% testing samples. We can see the purely using lasso the model mse is higher than the former improved model.
+
+```{r, warning=FALSE}
+# Comparing with our former model, lasso results is generally not better.
+ImproveModel_test_mse = graph2[14,4]
+# Check the difference of the two:
+(lasso_mse - ImproveModel_test_mse)/ImproveModel_test_mse  
+```
+
+When we add some of the Lasso selected variable like **log(Metascore), log(tomatoUserReviews), tomatoUserRating^2** back into former improved new model **LR2**, and generate another new model **LR3**. As shown in Figure 3, the performance of **LR3** is similar to or a slightly worse than **LR2**. We finalize our model as given in **LR2**. Also, the model **LR3** is also better.
+
+```{r, warning=FALSE}
+# variables selected by Lasso:
+La = as.data.frame(as.matrix(coef(lassoCV, s='lambda.min')))
+names(La)=c('coef')
+La$variables = row.names(La)
+
+# Selected variables by Lasso:
+La[La$coef > 0, 'variables']
+
+################################################
+# Use Lasso selected variables:
+# try add non-linear features
+LR3 = lm(PROFIT ~ I(Runtime^3) + imdbRating*imdbVotes + 
+           tomatoRating:tomatoReviews + I(tomatoReviews^3) +
+           tomatoUserRating*tomatoUserReviews + I(Budget^3)+
+           ManyAwards + log(Metascore)+log(tomatoUserReviews)+
+           I(tomatoUserRating^2), data = Q2num)
+summary(LR3)
+
+# New model performance:
+counts = 1
+splits = c(1:19)
+percents = seq(0.05,0.95,0.05)
+lr3_split = matrix(1:38, 19)
+
+for (s in seq(0.05,0.95,0.05)){
+  temp3 = matrix(1:20, 10)
+  mse1 = 0
+  mse2 = 0
+  # Iterate 50 times innerly:
+  for(iter in 1:50){
+    shufdata = Q2num[sample(nrow(Q2num)),]  #Shuffle results will change everytime
+    index_test = seq(1, nrow(shufdata)*s)   #Shuffle index results
+    train3 = shufdata[index_test, ]
+    test3 = shufdata[-index_test, ]
+    
+    LR3 =  lm(PROFIT ~ I(Runtime^3) + imdbRating*imdbVotes + 
+           tomatoRating:tomatoReviews + I(tomatoReviews^3) +
+           tomatoUserRating*tomatoUserReviews + I(Budget^3)+
+           ManyAwards + log(Metascore)+log(tomatoUserReviews)+
+           I(tomatoUserRating^2), data = train3)
+    trainMse = mse(LR3)
+    mse1 = mse1 + mse(LR3)
+    mse2 = mse2 + test_mse(LR3, test3)
+  }
+  
+  lr3_split[counts, 1] = mse1/50
+  lr3_split[counts, 2] = mse2/50
+  counts = counts + 1
+}
+lr3_split  = cbind(lr3_split , percents)
+colnames(lr3_split) = c("train_mse","test_mse","train %")
+
+graph3 = data.frame(baseTraiMse=lr1_split[,1], baseTestMse = lr1_split[,2],
+                    formerModelTrain=lr2_split[,1], formerModelTest=lr2_split[,2], 
+                    AddLassoTrain = lr3_split[,1], AddLassoTest = lr3_split[,2], 
+                    sampling = lr3_split[,3])
+
+graph3 %>% gather(key, MSE, baseTraiMse, baseTestMse,formerModelTrain,
+                  formerModelTest,AddLassoTrain,AddLassoTest) %>%
+  ggplot(aes(x=sampling, y=MSE, colour=key)) +
+    ylim(5e+15, 2.6e+16)+
+  geom_line()+theme_bw()+
+  ggtitle("Figure 3: (With Lasso selected) Compare MSEs") + 
+  labs(x="Train Sampling",y="train & test MSE")
+
+```
+
+We can summarize that sometimes domain knowledge can help on building good models, and Brute-force searching method can help on speed up the progress to make serch more efficient.
+
+# QUESTION 3
+
+For this section, we mainly focus on featurizing some categorical variables. Firstly, we clean the seperated categorical variables from the cleared dataframe from QUESTION 1.
+
+(1) Droped some columns that not important for our analysis later such as "BoxOffice", "Plot", "imdbID","Poster", "Website","TomatoURL","tomatoConsensus", "response", "Type", "Awards", and (we treated as numerical variables);
+
+(2) Remove NA values from dataframe.
+
+```{r,warning=FALSE}
+# Get dataframe with categorical variables:
+cati = sapply(year_movies, is.character)    # available categorical variables
+cati_movies = year_movies[ , cati]
+cati_movies$PROFIT = year_movies$PROFIT     # Keep the PROFIT column
+cati_movies[cati_movies == "N/A"] = NA
+
+# a) Drop column "BoxOffice":
+###  because "BoxOffice" has around 99% NAs and it would affect our analysis
+sum(is.na(cati_movies$BoxOffice))
+cati_movies = cati_movies[, !(colnames(cati_movies) %in% c("BoxOffice", "Plot", "imdbID",
+                                                           "Poster", "Website","tomatoURL",
+                                                           "tomatoConsensus", "Response",
+                                                           "Type", "Awards", "Title" ))]  
+cati_movies = cati_movies[complete.cases(cati_movies),]               
+dim(cati_movies)
+colnames(cati_movies)
+```
+
+Below we descirbe how we encode them into binary variables:
+
+#### "Rated" and "tomatoImage"
+
+(1) For "Rated" and "tomatoImage", we simply transfer them into factor variables.
+
+```{r, warning=FALSE}
+# For "Rated", "tomatoImage", "Production": 
+Q3 = cati_movies
+Q3$Rated = factor(Q3$Rated)
+Q3$tomatoImage = factor(Q3$tomatoImage)
+#Q3$Production = factor(Q3$Production)
+
+summary(Q3$Rated)
+summary(Q3$tomatoImage)
+#summary(Q3$Production)
+```
+
+#### "Language" and "Country"
+
+(2) Additionally, for variables as "Language" and "Country": because it is more intresting to see if the number of translated language/paeticipated countries in a released movie will affect the PROFIT rather than the actual language/contry category, we encode these variables and create new columns to save the count of langurages/countries. These could be seem as numerical values/factor values.
+
+```{r, warning=FALSE}
+# For count of Languages:
+Q3$cLanguage = 0
+for (i in c(1:length(Q3$Language))){     # i represent for row 
+  Q3$cLanguage [i] = length(strsplit(Q3$Language[i],',')[[1]])
+}
+summary(factor(Q3$cLanguage))
+
+# For count of Countries:
+Q3$cCountry = 0
+for (i in c(1:length(Q3$Country))){                   
+  Q3$cCountry[i] = length(strsplit(Q3$Country[i],',')[[1]])
+}
+summary(factor(Q3$cCountry))
+
+```
+
+#### "Director", "Genre", "Writer", "Actors", and "Production"
+
+(3) More complexity, for variables "Director"", "Genre"", "Writer"", "Actors": In order to encoding, we split the string using **strsplit()**. The supported packages include **library(tidyr)**, **library(reshape2)** with **unest()** and **dcast()**. Then, we utilize Lasso with package **glmnet** to select and pick the top profitable ranks for later modelling and analysis.
+
+```{r, warning=FALSE}
+# For Director:
+Q31 = Q3
+Q31$Director = strsplit(Q31$Director, "(\\s)?,(\\s)?")
+unnested = unnest(Q31)
+unnested$Director = paste0("Director_", gsub("\\s","_",unnested$Director))
+Q31 = dcast(unnested, ... ~ Director, fun.aggregate = length)
+
+target = Q31$PROFIT
+inputs = Matrix(as.matrix(Q31[, 12:1578]), sparse = TRUE) 
+samples = sample(1:nrow(Q31), round(0.50*nrow(Q31)))
+trainX = inputs[samples,]
+testX = inputs[-samples,]
+trainY = target[samples]
+testY = target[-samples]
+
+# look for good lambda
+q31cv = cv.glmnet(trainX, trainY, family='gaussian',alpha=1,
+                 type.measure = 'mse',nfold =6)
+L31 = as.data.frame(as.matrix(coef(q31cv, s='lambda.min')))
+names(L31)=c('coef')
+L31$variables = row.names(L31)
+
+# Selected "Director" variables by Lasso:
+topDirector = L31[L31$coef > 0, 'variables'][rev(
+  order(L31[L31$coef > 0, 'coef']))[1:5]]
+
+#Keep only the top Director in dataframe:
+Q31 = Q31[, (colnames(Q31) 
+             %in% c("Rated","tomatoImage","PROFIT","cLanguage",
+                    "cCountry","Director_Colin_Trevorrow","Director_Joss_Whedon",
+                    "Director_Kyle_Balda","Director_Lee_Unkrich",
+                    "Director_David_Yates"))] 
+
+##########################################
+# For Writer:
+Q32 = Q3
+Q32$Writer = strsplit(Q32$Writer, "(\\s)?, (\\s)?")
+unnested = unnest(Q32)
+unnested$Writer = paste0("Writer_", gsub("\\s", "_", unnested$Writer))
+Q32 = dcast(unnested, ... ~ Writer, fun.aggregate = length)
+
+target = Q32$PROFIT
+inputs = Matrix(as.matrix(Q32[, 12:5482]), sparse = TRUE) 
+samples = sample(1:nrow(Q32), round(0.50*nrow(Q32)))
+trainX = inputs[samples,]
+testX = inputs[-samples,]
+trainY = target[samples]
+testY = target[-samples]
+
+# look for good lambda
+q32cv = cv.glmnet(trainX, trainY, family='gaussian',alpha=1,
+                 type.measure = 'mse',nfold =6)
+L32 = as.data.frame(as.matrix(coef(q32cv, s='lambda.min')))
+names(L32)=c('coef')
+L32$variables = row.names(L32)
+
+# Selected top "Writer" by Lasso:
+topWriter = L32[L32$coef > 0, 'variables'][rev(
+  order(L32[L32$coef > 0, 'coef']))[1:5]]
+
+Q32 = Q32[, colnames(Q32) %in% c("Writer_Amanda_Silver_(screenplay)",
+                                 "Writer_Fran_Walsh_(screenplay)",
+                                 "Writer_Cinco_Paul","Writer_Ehren_Kruger",
+                                 "Writer_Jay_Wolpert_(characters)")]
+
+##########################################
+# For Genre:
+Q33 = Q3
+Q33$Genre = strsplit(Q33$Genre, ",")
+unnested = unnest(Q33)
+unnested$Genre = paste0("Genre_", gsub(" ", "", unnested$Genre))
+Q33 = dcast(unnested, ... ~ Genre, fun.aggregate = length)
+
+target = Q33$PROFIT
+inputs = Matrix(as.matrix(Q33[, 12:33]), sparse = TRUE) 
+samples = sample(1:nrow(Q33), round(0.50*nrow(Q33)))
+trainX = inputs[samples,]
+testX = inputs[-samples,]
+trainY = target[samples]
+testY = target[-samples]
+
+# look for good lambda
+q33cv = cv.glmnet(trainX, trainY, family='gaussian',alpha=1,
+                 type.measure = 'mse',nfold =6)
+L33 = as.data.frame(as.matrix(coef(q33cv, s='lambda.min')))
+names(L33)=c('coef')
+L33$variables = row.names(L33)
+topGe = L33[L33$coef > 0, 'variables'][rev(
+  order(L33[L33$coef > 0, 'coef']))[1:10]]
+
+Q33 = Q33[, colnames(Q33) %in% c("Genre_Animation","Genre_Adventure","Genre_Sci-Fi",
+                                 "Genre_Fantasy","Genre_Action","Genre_Musical",
+                                 "Genre_Thriller")]
+
+##########################################
+# For Actor:
+Q34 = Q3
+Q34$Actors = strsplit(Q34$Actors, "(\\s)?, (\\s)?")
+unnested = unnest(Q34)
+unnested$Actors = paste0("Actor_", gsub("\\s", "_", unnested$Actors))
+Q34 = dcast(unnested, ... ~ Actors, fun.aggregate = length)
+
+target = Q34$PROFIT
+inputs = Matrix(as.matrix(Q34[, 12:5035]), sparse = TRUE) 
+samples = sample(1:nrow(Q34), round(0.50*nrow(Q34)))
+trainX = inputs[samples,]
+testX = inputs[-samples,]
+trainY = target[samples]
+testY = target[-samples]
+
+# look for good lambda
+q34cv = cv.glmnet(trainX, trainY, family='gaussian',alpha=1,
+                 type.measure = 'mse',nfold =6)
+L34 = as.data.frame(as.matrix(coef(q34cv, s='lambda.min')))
+names(L34)=c('coef')
+L34$variables = row.names(L34)
+topActor = L34[L34$coef > 0, 'variables'][rev(
+  order(L34[L34$coef > 0, 'coef']))[1:10]]
+
+Q34 = Q34[, colnames(Q34) %in% c("Actor_Irrfan_Khan","Actor_Idina_Menzel",
+                                 "Actor_Jon_Hamm","Actor_Noel_Appleby",
+                                 "Actor_Robert_Downey_Jr.")]
+
+##########################################
+# For Production:
+Q35 = Q3
+Q35$Production = strsplit(Q35$Production, "(\\s)?, (\\s)?")
+unnested = unnest(Q35)
+unnested$Production=paste0("Prod_", gsub("\\s", "_", unnested$Production))
+Q35 = dcast(unnested, ... ~ Production, fun.aggregate = length)
+
+target = Q35$PROFIT
+inputs = Matrix(as.matrix(Q35[, 12:390]), sparse = TRUE) 
+samples = sample(1:nrow(Q35), round(0.50*nrow(Q35)))
+trainX = inputs[samples,]
+testX = inputs[-samples,]
+trainY = target[samples]
+testY = target[-samples]
+
+# look for good lambda
+q35cv = cv.glmnet(trainX, trainY, family='gaussian',alpha=1,
+                 type.measure = 'mse',nfold =6)
+L35 = as.data.frame(as.matrix(coef(q35cv, s='lambda.min')))
+names(L35)=c('coef')
+L35$variables = row.names(L35)
+
+topProd = L35[L35$coef > 0, 'variables'][rev(
+  order(L35[L35$coef > 0, 'coef']))[1:10]]
+
+Q35 = Q35[, colnames(Q35) %in% c("Prod_Warner_Bros._Pictures/Legendary",
+                                 "Prod_Lionsgate/Summit_Entertainment",
+                                 "Prod_Walt_Disney_Pictures",
+                                 "Prod_Warner_Bros_Pictures",
+                                 "Prod_Sony/MGM", "Prod_Touchstone")]
+
+```
+
+Finally, after merging all of the dataframes we created for different variables using **cbind()**, we have our final non-numerical variable dataframe **Q3_final**.
+
+```{r, warning=FALSE}
+##########################################
+# Merge all dataframes:
+Q3_final = cbind(Q31, Q32, Q33, Q34, Q35)
+colnames(Q3_final)
+```
+
+
+# QUESTION 4
+
+For this section, we use linear regression to predict profit based on all available non-numeric variables using the transformation datas save in QUESTION 3 dataframe **Q3_final**. We also graph the changes of train and test MSE over different data splitting percentage.
+
+In QUESTION 4, we just simply do linear regression with PROFIT among all non-numerical and numerical variables. WE will improve model in QUESTION 5:
+
+```{r, warning=FALSE}
+# Move PROFIT to the last column.
+Q4 = Q3_final[,c(1:2, 4:33, 3)]   
+
+counts = 1
+splits = c(1:19)
+percents = seq(0.05,0.95,0.05)
+lr4_split = matrix(1:38, 19)
+
+for (s in seq(0.05,0.95,0.05)){
+  temp4 = matrix(1:20, 10)
+  mse1 = 0
+  mse2 = 0
+  # Iterate 50 times innerly:
+  for(iter in 1:50){
+    shufdata = Q4[sample(nrow(Q4)),]    #Shuffle results will change everytime
+    index_test = seq(1, nrow(shufdata)*s)               #Shuffle index results
+    train4 = shufdata[index_test, ]
+    test4 = shufdata[-index_test, ]
+    
+    LR4 =  lm(PROFIT ~ ., data = train4)
+    trainMse = mse(LR4)
+    mse1 = mse1 + mse(LR4)
+    
+    LR4$xlevels[["Rated"]] <- union(LR4$xlevels[["Rated"]], levels(test4$Rated))
+    LR4$xlevels[["tomatoImage"]] <- union(LR4$xlevels[["tomatoImage"]], 
+                                          levels(test4$tomatoImage))
+    mse2 = mse2 + test_mse(LR4, test4)
+  }
+  
+  lr4_split[counts, 1] = mse1/50
+  lr4_split[counts, 2] = mse2/50
+  counts = counts + 1
+}
+lr4_split  = cbind(lr4_split , percents)
+colnames(lr4_split) = c("train_mse","test_mse","train %")
+
+graph4 = data.frame(non_num_Train=lr4_split[,1], non_num_Test = lr4_split[,2],
+                    sampling = lr4_split[,3])
+
+graph4 %>% gather(key, MSE, non_num_Train,non_num_Test) %>%
+  ggplot(aes(x=sampling, y=MSE, colour=key))+
+  geom_line()+theme_bw()+
+  ggtitle("Figure 4: Model MSEs with all non-num variables") + 
+  labs(x="Train Sampling",y="train & test MSE")
+
+print (graph4)
+```
+
+# QUESTION 5
+
+In this last section, we are going to improve the prediction quality in QUESTION 1 by using both numeric and non-numeric variables created from  Q3 as well as some additional transformed features like necessary interactions.
+
+(1) We merge the numerical dataframe **Q2num** and non-numerical dataframe **Q4** together to create the final dataframe **Q5**.
+
+```{r, warning=FALSE}
+Q5 = merge(Q2num, Q4, by="PROFIT")
+dim(Q5)
+```
+
+(1) First of all, we do the linear regression with all variables to see the performance. Generally,  without any improvement, we get a very bad performance on testing MSE and a slightly better training MSE comparing with the base model from QUESTION 1. The results are shown in **Figure 5-1**. **Figure 5-2**, **Figure 5-3**. It looks like there is over-fitting problem.
+
+```{r, warning=FALSE}
+LR5 = lm(PROFIT ~ . , data = Q5)
+print (summary(LR5))
+
+counts = 1
+splits = c(1:19)
+percents = seq(0.05,0.95,0.05)
+lr5_split = matrix(1:38, 19)
+
+for (s in seq(0.05,0.95,0.05)){
+  temp5 = matrix(1:20, 10)
+  mse1 = 0
+  mse2 = 0
+  # Iterate 50 times innerly:
+  for(iter in 1:50){
+    shufdata = Q5[sample(nrow(Q5)),]    #Shuffle results will change everytime
+    index_test = seq(1, nrow(shufdata)*s)               #Shuffle index results
+    train5 = shufdata[index_test, ]
+    test5 = shufdata[-index_test, ]
+    
+    LR5 = lm(PROFIT ~ . , data = train5)
+    trainMse = mse(LR5)
+    mse1 = mse1 + mse(LR5)
+    
+    LR5$xlevels[["Rated"]] <- union(LR5$xlevels[["Rated"]], levels(test5$Rated))
+    LR5$xlevels[["tomatoImage"]] <- union(LR5$xlevels[["tomatoImage"]], 
+                                          levels(test5$tomatoImage))
+    mse2 = mse2 + test_mse(LR5, test5)
+  }
+  
+  lr5_split[counts, 1] = mse1/50
+  lr5_split[counts, 2] = mse2/50
+  counts = counts + 1
+}
+lr5_split  = cbind(lr5_split , percents)
+colnames(lr5_split) = c("train_mse","test_mse","train %")
+
+graph5 = data.frame(Q1Train = lr1_split[,1], Q1Test = lr1_split[,2], 
+                    fullTrain=lr5_split[,1], fullTest = lr5_split[,2],
+                    sampling = lr5_split[,3])
+
+graph5 %>% gather(key, MSE, Q1Train, fullTrain) %>%
+  ggplot(aes(x=sampling, y=MSE, colour=key))+
+  geom_line()+theme_bw()+
+  ggtitle("Figure 5-1: Model train MSEs with all variables") + 
+  labs(x="Train Sampling",y="train MSE")
+
+graph5 %>% gather(key, MSE, Q1Test, fullTest) %>%
+  ggplot(aes(x=sampling, y=MSE, colour=key))+
+  geom_line()+theme_bw()+
+  ggtitle("Figure 5-2: Model test MSEs with all variables") + 
+  labs(x="Train Sampling",y="test MSE")
+
+graph5 %>% gather(key, MSE, Q1Train, Q1Test, fullTrain, fullTest) %>%
+  ggplot(aes(x=sampling, y=MSE, colour=key))+
+  geom_line()+theme_bw()+
+  ggtitle("Figure 5-3: Model MSEs with all variables") + 
+  labs(x="Train Sampling",y="train & test MSE")
+
+```
+
+(2) Therefore, we modify our model in some ways before to improve the performance and correct the issue:
+
+We firstly copy the model from QUESTION 2 with Lasso selected variables. Additionally, we ignore the amount of non-important varibales and added some profitable variables. We tried different log transformations and interactions. We decide our final model to be like below. Also we plot the results comparing with Q1 results in **Figure 6**.
+
+(a) For log and polynominal transformation, we are based on the information from the log correlationship table QUESTION 2. 
+
+(b) The interactions are based on domain knowledge. I was thinking that the rating for movies, for example, should multiple the total number of reviews and then add to the model. 
+
+(c) For the non-numerical variables, I selected those that have higher explanatory power.Specifically, we used many top selected profitable transformed binary variables from Q3 using LASSO. Such as "DirectorJossWhedon", "WriterEhrenKruger", "Genre_Action", "ActorRobertDowneyJr.", etc.
+
+To sum up, the training MSE for our Q5 new model is much better than that from Q1. However, the testing MSE is not that impressive.
+
+```{r, warning=FALSE}
+LR = lm(PROFIT ~ log(Runtime) + imdbRating*imdbVotes + 
+           tomatoRating:tomatoReviews + I(tomatoReviews^3) +
+           tomatoUserRating:tomatoUserReviews + I(tomatoUserReviews^2) + 
+          I(Budget^2) + log(Metascore) + I(tomatoUserRating^2)+
+          Director_David_Yates + Director_Joss_Whedon + Director_Kyle_Balda + 
+          Director_Lee_Unkrich+ Writer_Cinco_Paul+ Writer_Ehren_Kruger+ 
+          `Writer_Amanda_Silver_(screenplay)` + `Writer_Fran_Walsh_(screenplay)` +
+          Genre_Animation+`Genre_Sci-Fi`+ Genre_Adventure+ Genre_Action + 
+          Actor_Robert_Downey_Jr.+ `Prod_Lionsgate/Summit_Entertainment`, data = Q5)
+summary(LR)
+
+# Improved model 2:
+counts = 1
+splits = c(1:19)
+percents = seq(0.05,0.95,0.05)
+lr6_split = matrix(1:38, 19)
+
+for (s in seq(0.05,0.95,0.05)){
+  temp6 = matrix(1:20, 10)
+  mse1 = 0
+  mse2 = 0
+  # Iterate 50 times innerly:
+  for(iter in 1:50){
+    shufdata = Q5[sample(nrow(Q5)),]    #Shuffle results will change everytime
+    index_test = seq(1, nrow(shufdata)*s)               #Shuffle index results
+    train6 = shufdata[index_test, ]
+    test6 = shufdata[-index_test, ]
+    
+    LR = lm(PROFIT ~ log(Runtime) + imdbRating*imdbVotes + 
+           tomatoRating:tomatoReviews + I(tomatoReviews^3) +
+           tomatoUserRating:tomatoUserReviews + I(tomatoUserReviews^2) + 
+          I(Budget^2) + log(Metascore) + I(tomatoUserRating^2)+
+          Director_David_Yates + Director_Joss_Whedon + Director_Kyle_Balda + 
+          Director_Lee_Unkrich+ Writer_Cinco_Paul+ Writer_Ehren_Kruger+ 
+          `Writer_Amanda_Silver_(screenplay)` + `Writer_Fran_Walsh_(screenplay)` +
+          Genre_Animation+`Genre_Sci-Fi`+Actor_Robert_Downey_Jr.+
+          `Prod_Lionsgate/Summit_Entertainment`, data = train6)
+    trainMse = mse(LR)
+    mse1 = mse1 + mse(LR)
+    
+    LR$xlevels[["Rated"]] <- union(LR$xlevels[["Rated"]], levels(test6$Rated))
+    LR$xlevels[["tomatoImage"]] <- union(LR$xlevels[["tomatoImage"]], 
+                                          levels(test6$tomatoImage))
+    mse2 = mse2 + test_mse(LR, test6)
+  }
+  
+  lr6_split[counts, 1] = mse1/50
+  lr6_split[counts, 2] = mse2/50
+  counts = counts + 1
+}
+lr6_split  = cbind(lr6_split , percents)
+colnames(lr6_split) = c("train_mse","test_mse","train %")
+
+graph6 = data.frame(Q1Train = lr1_split[,1], Q1Test = lr1_split[,2], 
+                    newTrain =lr6_split[,1], newTest = lr6_split[,2],
+                    sampling = lr6_split[,3])
+
+graph6 %>% gather(key, MSE, Q1Train, Q1Test, newTrain, newTest) %>%
+  ggplot(aes(x=sampling, y=MSE, colour=key))+
+  ylim(3e+15, 2.5e+16)+
+  geom_line()+theme_bw()+
+  ggtitle("Figure 6:Improved MSEs (with non-num & num vars)") + 
+  labs(x="Train Sampling",y="train & test MSE")
+
+```
+
+
+
+
+

@@ -1,0 +1,683 @@
+---
+title: "OMS DAVA Project - Part I"
+author: "Yiwei Yan,    yyan76"
+date: "October 9, 2016"
+output: pdf_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#knitr::opts_chunk$set(fig.width = 6, fig.height = 3.8)
+knitr::opts_chunk$set(out.width='265px', dpi=40)
+```
+
+
+### Preparation:
+
+This report is the first part of OMS DATA Project that aimed is to investigate the relationship between the movie descriptors and the box office success of movies. This Part I involves getting the data ready for analysis and modeling and doing some preliminary investigations.
+
+First of all, we load the dataset for analysis, and take a general look about this dataset. The original dataframe **movies_merged** contains 39 columns and 40789 rows (40789, 39). The names of those variables contain in the dataset as shown below. 
+
+```{r}
+library(ggplot2)      # listed useful librarys for this project
+#library(tm)
+#library(tidyr)
+#library(dplyr)
+#library(reshape2)
+library(lubridate)
+library(GGally)
+library(corrplot)
+```
+
+```{r}
+setwd('/Users/yywxenia/Desktop/Fall2016/6242_DataVisual/HWs/Project1')
+load('movies_merged')
+dim(movies_merged)         # Its dimention is (40789, 39)
+names(movies_merged)       # variable names
+# str(movies_merged)
+
+```
+
+### QUESTION 1:
+" The variable **Type** captures whether the row is a movie, a TV series, or a game. 
+Remove all rows that do not correspond to movies. How many rows did you remove? "
+
+The variable **Type** contains the category of the rows (movie, TV series, game, etc.). For solving the problem 1, we recreate a new dataframe named **is_movie** which only contains the type of "movie". The dimention of this new **is_movie** is (40000, 39). 
+
+On the other hand, to answer how many rows we removed, we create **not_movie** by the same methodology. Since the dimention of the **not_movie** is (789, 39), we remove 789 rows for this question.
+
+```{r}
+sum(is.na(movies_merged$Type))     # There is no "NA" in this column
+is_movie = movies_merged[movies_merged$Type == "movie", ] #This is what we are looking for.
+not_movie = movies_merged[movies_merged$Type != "movie", ] #This is the opposite "not_movie".
+dim(is_movie)
+dim(not_movie)     # WE removed 789 obs of 39 variables.
+NROW(not_movie)
+```
+
+### QUESTION 2:
+
+" The variable Runtime represents the length of the title as a string. Write R code to convert it to a numeric value (in minutes) and replace Runtime with the new numeric column."
+
+For answering the second question, we keep using the dataset we created in Qestion 1 **is_movie** with (40000, 39). The **Runtime** variable contains the movies' time formatted like "70 min" and also it has several "N/A" values. We create a new column for the transforming nummerical runtime like "70" in the **is_movie**. We utilize **gsub()** for  removing the non-number substring and **as.numeric** to transfer the string to number.
+
+In addition, we remove the "N/A" value rows belows to **Runtime**. We utilze **complete.cases()** to finish this task based on the new column **Numeric_Runtime**. We know that R treats "N/A" different from "NA", but during the build of column **Numeric_Runtime**, R transfers "N/A" to "NA" in our new column **Numeric_Runtime** for us to remove easily. **NoNA_Runtime** is the dataframe after those changes.
+
+```{r}
+is_movie$Numeric_Runtime = (gsub("\\D", "", is_movie$Runtime))
+is_movie$Numeric_Runtime = as.numeric(is_movie$Numeric_Runtime) # added new column 
+head(is_movie$Runtime)
+head(is_movie$Numeric_Runtime)
+
+sum(is.na(is_movie$Numeric_Runtime))  #Total number of NA value.
+NoNA_Runtime = is_movie[complete.cases(is_movie[,40]),]
+dim(NoNA_Runtime)
+```
+
+ Then, we can investigate and describe the distribution of **Runtime** and comment on how it changes over **Year** and  **Budget**. After remove 751 "N/A" rows, there are 39249 rows left with new dimention (39249, 40).
+ 
+From Figure 1-1, we can see the distribution of Runtime is like a bi-modal shape. There is a smaller peak on the distribution of shorter movies around 15 min, and a twice higher peak of longer movies around 100 min. The largest count of movies are concentrated on 100-120 min.
+ 
+```{r}
+# distribution of Runtime
+ggplot(NoNA_Runtime, aes(x = Numeric_Runtime)) + 
+  geom_histogram(color="black", fill="white",binwidth=8)+theme_bw()+
+  labs(title = "Figure 1-1: Runtime Distribution")
+```
+
+#### (1) Year and Runtime
+
+For Year and Runtime, we firstly draw a basic scatter plot for **Year** and **Numberic_Runtime** in Figure 1-2. We can see there is a slightly increasing trend to indicate that as year goes on, the movies become longer and longer. 
+
+```{r}
+# (1) With Year:
+qplot(Year, Numeric_Runtime, data = NoNA_Runtime, size=I(1.5)) + 
+  stat_smooth(color = 'red',size=I(2), se=F) +
+  theme_bw()+
+  labs(title = "Figure 1-2: Runtime v.s. Year")
+
+```
+
+Since we notice there is a shape difference of Figure 1-2 that before Year 1920 and after 1920, we seperate the dataset into two temperate datasets and draw scatters again. From Figure 1-3 illustrating Runtime with Year less than 1920 (**temp1**), we do a logarithmic transfermation for Numeric_Runtime, and there shows a likely linear relationship bewtween Year and log(Runtime). 
+
+Before 1920, the movies' length is in an increasing trend as year goes by. There are very limited movies produced during that period. On the other hand, from dataset **temp2**, after 1920, the movies' length remains nearly constant and there is no big change between the relationship of movies' runtime and years.
+
+```{r}
+temp1 = NoNA_Runtime[NoNA_Runtime$Year <=1920, ]
+qplot(Year, log(Numeric_Runtime), data = temp1, size=I(1.5)) + 
+  stat_smooth(color = 'red',size=I(1), se=F) +
+  theme_bw()+
+  labs(title = "Figure 1-3: Runtime v.s. Year before 1920")
+
+temp2 = NoNA_Runtime[NoNA_Runtime$Year > 1920, ]
+qplot(Year, Numeric_Runtime, data = temp2, size=I(1.5)) + 
+  stat_smooth(color = 'red',size=I(1), se=F) +
+  theme_bw()+
+  labs(title = "Figure 1-4: Runtime v.s. Year after 1920")
+
+cor(temp2$Year, temp2$Numeric_Runtime)    #correlation
+```
+
+#### (2) Budget and Runtime
+
+Before we investigate the relationship of **Budget** and **Numeric_Runtime**, we remove some "NA" from the column **Budget** and create a dataset **NoNA_budget** with left (4520, 40), which removes 85% data from NoNA_Runtime. From Figure 1-5, it shows that most amount of movie budgets concentrated distribute on movies' that lenghts from 70 min to 150 min. 
+
+```{r}
+NoNA_budget = NoNA_Runtime[complete.cases(NoNA_Runtime[,36]),]
+qplot(Numeric_Runtime, Budget, data = NoNA_budget, size=I(1.5)) + 
+  stat_smooth(color = 'red',size=I(1), se=F) +
+  theme_bw()+
+  labs(title = "Figure 1-5: Runtime v.s. Budget")
+```
+
+### QUESTION 3: 
+
+"Genre Parse each text string into a binary vector with 1s representing the presence of a genre and
+0s the absence and add it to the dataframe as additional columns. Graph and describe the relative proportions of titles having the top 10 genres and examine how the distribution of gross revenue (variable Gross) changes across genres. "
+
+For Question 3, we again use the relatively complete dataset **is_movie** at first, to modify the **Genre** column to create the binary columns before we remove any "NA" from specified columns corresponding to analysis. New created dataset named **is_movie_genre** (39014, 40).
+
+In order to create binary vectors, we remove "N/A" of column **Genre**. Then we split the string using **strsplit()** by comma, and create the dictionary for all genres. The detailed code is shown below. Until now, we gain totally 28 types of genres.
+
+```{r}
+is_movie_genre = is_movie
+is_movie_genre$Genre[is_movie_genre$Genre == "N/A"] = NA
+is_movie_genre = is_movie_genre[complete.cases(is_movie_genre[,6]),]
+
+split_genreVal = strsplit(is_movie_genre$Genre, ",")           
+dictionary = unique(gsub(" ", "", unlist(split_genreVal)))
+dictionary[dictionary == "N/A"] = NA
+Dict = dictionary[ !is.na(dictionary) ]
+Dict  # print out all kinds.
+length( dictionary[!is.na(dictionary)] )  #total number of objects in the list of Genre.
+```
+
+In addition, we use **for-loop** to generate the binary vectors for genres from the dictionary.
+
+```{r}
+cols = c(Dict)
+vals = 0
+sapply(1:length(cols), function(i)
+  is_movie_genre[length(cols), cols[i]] <<- vals[i])    # add multiple columns for Genres.
+is_movie_genre[, 41:68][is.na(is_movie_genre[, 41:68])]= 0 
+is_movie_genre[, 41:68][is.na(is_movie_genre$Genre)]= 0
+
+OriginalCol = 40
+for (i in c(1:length(is_movie_genre$Genre))){     # i represent for row
+  value = match(gsub(" ", "", unlist(strsplit(is_movie_genre$Genre[i],","))), Dict) # found which values matched
+  l = length(OriginalCol+value)           # find the right column to set value 1
+  for (t in c(1:l))
+  {is_movie_genre[i, (OriginalCol+value)[t]] = 1  #change avaliable genres to '1',others to '0'.
+    }
+}
+```
+
+We print out some sample rows to show that our transfermation is successful.
+
+```{r}
+# Simple test for our results by comparison:
+is_movie_genre[10000:10003,41:68]                     
+is_movie_genre$Genre[10000:10003]
+```
+
+There is a huge amount of "NA" in column **Gross** (34459), here we remove all "NA" (dataset **sample**(4555, 68)) before doing analysis. We compute the column sum **colSums** of those binary vectors of "1" and rank those genres. Below we listed the top 10 genre names and counts. Figure 2-1 provides a proportion plot for the top10 genres.
+
+```{r}
+sum(is.na(is_movie_genre$Gross)) 
+sample = is_movie_genre[complete.cases(is_movie_genre[,38]),]
+
+# List the top 10 ranking genres.
+Ranks = colSums(sample[41:68]==1)
+Ranks                                   # column sum of vectors.
+tops = rev(order(colSums(sample[41:68]==1)))
+Top10 = Dict[tops][1:10]
+tops_genre = colSums(sample[Top10]==1)
+tops_genre   # This is the top ten genres
+
+### Plot the proportions:
+dat = data.frame(
+    tops_genre_name = factor(Top10, levels=Top10),
+    Proportions = tops_genre/dim(sample)[1])
+ggplot(data=dat, aes(x=tops_genre_name, y=Proportions)) +
+    geom_bar(stat="identity")+
+      labs(title = "Figure 2-1: Proportions of the Top 10 Genres")+theme_bw()
+```
+
+Moreover, we generate a new binary column on sample named **tops** to annotate if a movie belongs to the top10 genres. If movie belongs to tops10, the value is 0 othervise 1. Then, we can plot the distribution gross on movie genres in summary. As mentioned, in Figure 2-2, most of the **Gross** are coming from the tops10 movie genres, while the non-top10 genres has much lower Gross revenue.
+
+```{r}
+# Create a new column tops10 to note which movies belong to the Top10 classes:
+sample$tops = 0
+for (i in c(1:length(sample$Gross))){
+  if (sample$Drama[i]==1 || sample$Comedy[i]==1 || sample$Action[i]==1 || 
+      sample$Adventure[i]==1 || sample$Crime[i]==1 || sample$Romance[i]==1 || 
+      sample$Thriller[i]==1 || sample$Horror[i]==1 || sample$`Sci-Fi`[i]==1 || 
+      sample$Mystery[i]==1){sample$tops[i] = 1}}
+qplot(x =Gross, data = sample, color = I('black'), fill = I('red'),
+      ylab = "Counts in/out Top10",
+      main = "Figure 2-2: Trend of Gross on Movies in/out Top10") + 
+  facet_wrap(~tops)+theme_bw()
+```
+
+Moreover, we plot Gross with Top5 genres seperately (Figure 3-1 to Figure 3-5) to investigate which types of genres contribute more than others on revenue.
+
+```{r}
+ggplot(data = sample, aes(x = Gross), 
+       main = "Figure 3-1: Drama and Gross") +
+  geom_histogram()+facet_wrap(~Drama) +theme_bw()
+
+ggplot(data = sample, aes(x = Gross), 
+       main = "Figure 3-2: Comedy and Gross") +
+  geom_histogram()+facet_wrap(~Comedy) +theme_bw()
+
+ggplot(data = sample, aes(x = Gross), 
+       main = "Figure 3-3: Action and Gross") +
+  geom_histogram()+facet_wrap(~Action) +theme_bw()
+
+ggplot(data = sample, aes(x = Gross), 
+       main = "Figure 3-4: Adventure and Gross") +
+  geom_histogram()+facet_wrap(~Adventure) +theme_bw()
+
+ggplot(data = sample, aes(x = Gross), 
+       main = "Figure 3-5: Crime and Gross") +
+  geom_histogram()+facet_wrap(~Crime) +theme_bw()
+```
+
+In conclusion, from comparing the **facet=1** of those graphs: there seems a positive correlation between ranks of genres with revenue. From top1 to top5 genres, their contribution to Gross is decreasing.
+
+### QUESTION 4:
+"Find and remove all rows where you suspect a merge error occurred based on a mismatch between these two variables Year and Released."
+
+For this question, we decide to utilize **is_movie_genre** as **Q4** dataframe to complete this task because it is a project focus on movie, and for the convenience of rest of questions. In summary, our logic is:
+
+(1) Step 1: Check if **Year** and **Released** coloums have any "NA". Only **Released** contains NAs.
+
+(2) Step 2: Because that **Year** (YYYY) and **Released** (YYYY-MM-DD) have different date formats, we create a new column for **Released** named **Released2** with numerical format "YYYY" that is the same of **Year**.
+
+(3) Step 3: For this question, since **Released** has NAs but **Year** doesn't, we should not treat "NA" as "mismatch". Thus, in order to not remove NAs, we do a **for-loop** to change values from **Released2** to be the same as in **Year** when **Released2 == NA**.
+
+(4) Step 4: Only keep the matched year values of **Released2** and **Year** and generate the final dataframe **Q4m**.
+
+(5) Step 5: Lastly, we compute that 14.4% total data has been removed from **Q4**, and there are 16.9% of **!is.na(Gross)** has been removed from this whole process.
+
+```{r}
+## Find and remove all rows where you suspect a merge error occurred 
+Q4 = is_movie_genre
+
+sum(is.na(Q4$Year))               # Year has no NAs
+sum(is.na(Q4$Released))           # Release has some NAs, we donot need to remove NAs
+Q4$Released2 = as.double(format(Q4$Released, "%Y")) 
+
+for(i in c(1: length(Q4$Year))){
+  if(is.na(Q4$Released2[i])){
+    Q4$Released2[i] = Q4$Year[i]
+  }else if(!is.na(Q4$Released2[i])){
+    Q4$Released2[i] = Q4$Released2[i]
+  }
+}
+
+# Only keep the matched data, the new dataframe is Q4m.
+Q4m = Q4[Q4$Released2 ==Q4$Year,]   
+dim(Q4)
+dim(Q4m)
+
+# Compute how many rows deleted with percentage           
+(nrow(Q4)-nrow(Q4m)) / nrow(Q4)  # Percent of data be removed from Q4 (including NAs)
+
+## How much Gross be removed:
+(sum(!is.na(Q4$Gross)) - sum(!is.na(Q4m$Gross))) / sum(!is.na(Q4$Gross))
+
+```
+
+### QUESTION 5:
+
+"Investigate the relationship between release date and gross revenue and comment on what times of year are most high revenue movies released in."
+
+For question 5, we inherit the dataframe **Q4m** and remove NA value from Gross in it as **Q5m**.
+
+First of all, we plot a simple direct scatter plot for **Gross** and **Year** for information gaining. We can only conclude from Figure 4 that more revenues gain in recent year rather than in 1920s, and the max amount of gross revenue happend in release year 2009.
+
+```{r}
+### Q5: Find the best release 'Date' 
+Q5m = Q4m[complete.cases(Q4m[,38]),]     #Remove NA in Gross
+
+#trend in Year:
+qplot(Year, Gross, data=Q5m, geom='point', 
+      xlab = "Released Year", 
+      ylab = "Movies' Gross Revenue",
+      main = 'Figure 4: Revenue Changes of Year Released Movies')+
+  geom_smooth(color='red',se=F, size=0.3)+
+  theme_bw()
+
+r = which(Q5m$Gross == max(Q5m$Gross))
+Q5m$Year[r]   # max value year
+```
+
+#### (1) Relationship between released month and gross revenue
+
+In order to find out more details about what times of year are most high revenue movies released in, we seperate the gross revenue data into 12 months. Figure 5-1 shows how the revenue changes in different months. It illustrates a wave motion (fluctuation) of the gross revenue change through 12 months. Basically, May-July and Nov-Dec are more profitable seasons than Jan-April and Aug-Oct, which might because of new year holidays and summer breaks.
+
+```{r}
+# trend in Month:
+Q5m$RelDate = as.integer(month(Q5m$Released))
+Q5Group = aggregate(Q5m$Gross, list(Q5m$RelDate), mean)
+Q5Group
+Q5Group$Group.1 = factor(
+  Q5Group$Group.1, levels = 1:12,
+  labels = c("Jan","Feb","Mar","April","May","June",
+             "July","Aug","Sept","Oct", "Nov","Dec"))
+
+ggplot(data=Q5Group, aes(x=Group.1, y=x)) + geom_bar(stat="identity")+
+  xlab("Month") +ylab("Gross")+
+  labs(title = "Figure 5-1: Revenues Change with Released Month")+
+  theme_bw()
+```
+
+#### (2) Relationship between released month and gross revenue for different top genres
+
+Moreover, we utilize the same methodology to find out if the fluctuation of revenue changes by months will be the same for different top movie genres. Here we only select the top10 movie genres for analysis. Figure 5-2 provide the information to answer this question. 
+
+Specifically, black line is for "drama", "green" line represents "comedy", "red" line is for "action", blue is for "adventure", pink line is "crime", salmon represents 'romance', grey is 'thriller', yellow is 'horror', orange is for 'sci-fi',and purple is for 'mystery'.
+
+In total, there still shows a wave shape in Figure 5-2. Similarly, higher revenue periods are around May-July and Nov-Dec, and lower profit periods are Jan-April and Aug-Oct. No matter for what genre of movies, the basic trend for profitable release dates are similar and only a lightly different through genres. Based on the information of Figure 5-2, we could recommendation for releasing date is to release movies around May-July and Nov-Dec to gain a higher revenue.
+
+```{r}
+dra = Q5m[Q5m$Drama == 1,]
+com = Q5m[Q5m$Comedy == 1,]
+act = Q5m[Q5m$Action == 1,]
+adv = Q5m[Q5m$Adventure == 1,]
+cri = Q5m[Q5m$Crime == 1,]
+rom = Q5m[Q5m$Romance == 1,]
+th = Q5m[Q5m$Thriller == 1,]
+hor = Q5m[Q5m$Horror == 1,]
+sci = Q5m[Q5m$`Sci-Fi` == 1,]
+mys = Q5m[Q5m$Mystery == 1,]
+
+# Monthly Trend:
+draG = aggregate(dra$Gross, list(dra$RelDate), mean)
+comG = aggregate(com$Gross, list(com$RelDate), mean)
+actG = aggregate(act$Gross, list(act$RelDate), mean)
+advG = aggregate(adv$Gross, list(adv$RelDate), mean)
+criG = aggregate(cri$Gross, list(cri$RelDate), mean)
+romG = aggregate(rom$Gross, list(rom$RelDate), mean)
+thG = aggregate(th$Gross, list(th$RelDate), mean)
+horG = aggregate(hor$Gross, list(hor$RelDate), mean)
+sciG = aggregate(sci$Gross, list(sci$RelDate), mean)
+mysG = aggregate(mys$Gross, list(mys$RelDate), mean)
+
+test = cbind(draG, comG$x, actG$x, advG$x, criG$x, romG$x, thG$x, horG$x, sciG$x,mysG$x)
+
+plot(test$Group.1,test$x, lwd=2,
+     type='l',
+     lty=1,
+     xlab = "Months",
+     ylab = "Mean Gross Revenue",
+     main = "Figure 5-2: Gross Monthly Change in Genres",
+     ylim=c(0,430000000))
+  lines(test$Group.1,test$`comG$x`,lty = 2,col='green',lwd=1.2)
+  lines(test$Group.1,test$`actG$x`,lty = 3,col='red',lwd=1.2)
+  lines(test$Group.1,test$`advG$x`,lty = 4,col='blue',lwd=1.2)
+  lines(test$Group.1,test$`criG$x`,lty = 5,col='pink',lwd=1.2)
+  lines(test$Group.1,test$`romG$x`,lty = 6,col='darksalmon',lwd=1.2)
+  lines(test$Group.1,test$`thG$x`,lty = 7,col='grey',lwd=1.2)
+  lines(test$Group.1,test$`horG$x`,lty = 8,col='yellow',lwd=1.2)
+  lines(test$Group.1,test$`sciG$x`,lty = 9,col='orange',lwd=1.2)
+  lines(test$Group.1,test$`mysG$x`,lty = 10,col='purple',lwd=1.2)
+```
+
+Statistically, for each genre, we can compute the largest revenue values from different months to summary which month will be the best period for release which genres based on our data. Below we list and recommend the best top 5 months for different genres to release movies in decreasing order:
+
+```{r}
+# max value monthly of different top genres 
+### Recommended month for each genre:
+order(draG$x,decreasing=T)[1:5]  # Drama
+order(comG$x,decreasing=T)[1:5]  # Comedy
+order(actG$x,decreasing=T)[1:5]  # Action
+order(advG$x,decreasing=T)[1:5]  # Adventure
+order(criG$x,decreasing=T)[1:5]  # Crime
+order(romG$x,decreasing=T)[1:5]  # Romance
+order(thG$x,decreasing=T)[1:5]   # Thriller
+order(horG$x,decreasing=T)[1:5]  # Horror
+order(sciG$x,decreasing=T)[1:5]  # Sci-Fi
+order(mysG$x,decreasing=T)[1:5]  # Mystery
+
+```
+
+### QUESTION 6:
+
+"Investigate the pairwise relationships between the different descriptors using graphs. Comment on similarities and differences between the user ratings of IMDb and the critics ratings of Rotten Tomatoes. Comment on the relationships between these variables and the gross revenue. "
+
+```{r}
+Q6 = Q5m
+```
+
+For this question, we inherit the dataframe from question 5 as **Q6**. 
+
+We give explanations for the important variables for this Problem. The imdb numerical rating **imdbRating** is based on votes from users on a 1-10 star scale. While tomato ratings **tomatoRating** are ratings from a website that collect selected critics/publications rating who are usually professionals and have reviewed many films over years. **tomatoUserRating** are ratings from normal users at tomato website. **tomatoReviews** and **imdbVotes** represent the number of viewers in rating.
+
+If 60% or more of the selected reviews are FRESH **tomatoFresh**, then the movie receives as a "FRESH" rating. "Tomatometer" **tomatoMeter** is the primary rating vehicle, which is a measure of the number of "FRESH" reviews as a percentage of overall. (tomatoMeter = tomatoFresh/(tomatoFresh+tomatoRotten) or tomatoFresh/tomatoReviews)
+
+First of all, we want to see if there is a big correlation between number of users voting and rating. 
+
+(1) From Figure 6-1, we notice that for professionals, **tomatoRating** and **tomatoReviews** has very low positive correlation 0.26, which means the amount of critics participating the rating does not affect the rating result too much; 
+
+(2) On the other hand, the **imdbRating** and **imdbVotes** has higher correlation 0.48, which means more users voting could affect the ditection of rating scores. 
+
+(3) Also, **imdbRating** and **tomatoRating** are highly correlated (0.81), which means nomal users and critics have similar opinions on movies.
+
+```{r}
+df1 = data.frame(Q6$imdbRating,Q6$imdbVotes, Q6$tomatoRating, Q6$tomatoReviews)
+df1 = na.omit(df1)
+ggpairs(df1,columnLabels = c("iRating", "iVotes","tRating","tReviews"),
+        title="Figure 6-1: Corr of Imdb and Tomato")
+```
+
+Then, we graph the correlation among **tomatoMeter, tomatoFresh, tomatoRotten**. 
+
+As expected in Figure 6-2, **tomatoMeter** has negative correlation with **tomatoRotten** and positive correlation with **tomatoFresh**. As discussed before, Fresh represents movies scored 60% OR higher, whilst Rotten means movies score under 59%. Meter is the total percent of Fresh, which is why they have positive relation.
+
+```{r}
+# tomatoMeter = tomatoFresh/(tomatoFresh+tomatoRotten) or tomatoFresh/tomatoReviews
+df2 = data.frame(Q6$tomatoMeter,Q6$tomatoFresh, Q6$tomatoRotten)
+df2 = na.omit(df2)
+ggpairs(df2,columnLabels = c("tMeter", "tFresh","tRotten"),
+        title="Figure 6-2: Tomato Meter, Fresh, and Rotten")
+```
+
+Additionally, in Figure 6-3, since **tomatoUserReviews** are nearly independent from other three variables, we are not going to discuss it now. Additionally, we can detect that **tomatoUserMeter** are highly positive correlated with **tomatoUserRating**(0.90) and **tomatoRating** (0.73). So does **tomatoUserRating** and **tomatoRating** (0.68).
+
+Besides, different types of ratings are positive correlated with each other as shown in Figure 6-4, which means the oppinion about movies are similar among different types of users, especially tomato critics and imdb users (0.82).
+
+```{r}
+df3 = data.frame(Q6$tomatoUserMeter, Q6$tomatoUserRating, 
+                 Q6$tomatoRating, Q6$tomatoUserReviews)
+df3 = na.omit(df3)
+ggpairs(df3,columnLabels = c("tUserMeter", "tUserRating", 
+                             "tRating", "tUserReviews"),
+        title="Figure 6-3: Correlation Comparisons")
+```
+
+```{r}
+df4 = data.frame(Q6$imdbRating, Q6$tomatoUserRating,Q6$tomatoRating)
+df4 = na.omit(df4)
+ggpairs(df4,columnLabels = c("imdb", "tomatoUser", "tomato"),
+        title="Figure 6-4: Correlation of Different Ratings")
+```
+
+To sum up the relations of imbd user rating and tomato critics rating:
+
+The differences are since tomato ratings are from professionals, it means the scores are more believable and independent from the number of reviewers. There are usually less number of total votes of critics than from imdb users;  The similarity are obvious that their judge of movies' quality are similar. They are nearly positive linear relationship as in Figure 6-5.
+
+```{r}
+qplot(Q6$tomatoRating, Q6$imdbRating, size=I(1.5)) + 
+  stat_smooth(color = 'red',size=I(1), se=F) +
+  theme_bw()+
+  labs(title = "Figure 6-5: tomatoRating v.s. imdbRating")
+```
+
+Lastly, we want to find out which of these ratings are the most highly correlated with gross revenue. Similarly, we draw correlation graphs as Figure 6-6. The highest correlation is between **Gross** and **tomatoUserRating** with 0.259.
+
+```{r}
+
+df5 = data.frame(Q6$imdbRating,Q6$tomatoUserRating,Q6$tomatoRating, Q6$Gross)
+df5 = na.omit(df5)
+ggpairs(df5,  columnLabels = c("imdb", "tomatoUser", "tomato","Gross"),
+        title="Figure 6-6: Gross Revunue v.s. Ratings")
+```
+
+### QUESTION 7:
+
+" Convert Award to a three dimensional binary vector whose first component represents no nomination or awards, the second component represents some nominations/awards, and the third component represents many nominations or awards. "
+
+As usual, we use dataframe **Q6** for question 7 as **Q7**.
+
+(1) We do not delete the NA values from the **Q7$Awards**. Since we cannot ensure if "NA" represents "Unknow value" or "No value like 0", in order to keep as many data as possible and for the convinience of later analysis, we transfer "N/A" into zeros.
+
+(2) Then, we add three new columns for Q7 as **None**, **Some**, **Many** and assign them all 0 firstly. We grab the numerical numbers from **Awards** column by utilzing **gregexpr**. 
+
+(3)Based on a **for-loop**, we assign binary values to **None**, **Some**, and **Many** following rules that if Q7&Awards==0 then None=1, else if 0<Q7&Awards<=5 then Some=1, and if Q7&Awards>5 then Many=.
+
+```{r}
+Q7 = Q6
+Q7$Awards[Q7$Awards == "N/A"] = NA   
+Q7$Awards[is.na(Q7$Awards)] = 0
+Q7$None = 0
+Q7$Some = 0
+Q7$Many = 0
+
+for (r in c(1:length(Q7$Awards))){
+    h = sum(as.numeric(unique(unlist(
+      regmatches(Q7$Awards[r], gregexpr("[0-9]+", Q7$Awards[r]))))))
+    if (h==0){
+      Q7$None[r] = 1
+    } else if (1<= h && h <=5){
+      Q7$Some[r] = 1
+    } else if(h >5){
+      Q7$Many[r] = 1
+    }
+}
+## Sample datas
+tail(Q7[c("Awards", "None", "Some", "Many")])
+```
+
+According to state the gross revenue's distribution changing across these three categories, we use a similar method from Q3 and Q5. From Figure 7-1, most of the gross revenue comes from win/nominated movies, and those movies are more profitable. 
+
+Specifically, comparing the "1" facets of Figure 7-2, 7-3 and 7-4, we can conclude that since **Many** has a longer tail, which means it has the potential to help on getting larger revenue. On the other hand, **None** helps the least on getting revenues.
+
+```{r}
+# Create a new column tops10 to note which movies belong to the Top10 classes:
+Q7$wins = 0
+for (i in c(1:length(Q7$Gross))){
+  if (Q7$Some[i]==1 || Q7$Many[i]==1){Q7$wins[i] = 1}
+  else if (Q7$None[i]==1){
+    Q7$wins[i] = 0
+  }}
+
+qplot(x =Gross, data = Q7, color = I('black'), fill = I('red'),
+      ylab = "Counts",
+      main = "Figure 7-1: Trend of Gross on Awards") + 
+  facet_wrap(~wins)+theme_bw()
+
+qplot(x =Gross, data = Q7, color = I('black'), fill = I('salmon'),
+      ylab = "Counts",
+      main = "Figure 7-2: Trend of Gross on None") + 
+  facet_wrap(~None)+theme_bw()
+
+qplot(x =Gross, data = Q7, color = I('black'), fill = I('salmon'),
+      ylab = "Counts",
+      main = "Figure 7-3: Trend of Gross on Some") + 
+  facet_wrap(~Some)+theme_bw()
+
+qplot(x =Gross, data = Q7, color = I('black'), fill = I('salmon'),
+      ylab = "Counts",
+      main = "Figure 7-4: Trend of Gross on Many") + 
+  facet_wrap(~Many)+theme_bw()
+```
+
+### QUESTION 8:
+
+"Come up with two new insights that are expected, and one new insight (backed up by data and graphs) that is unexpected at first glance and do your best to motivate it. "
+
+#### 1. Expected: **Gross** and **Budget** and **Domestic_Gross**
+
+The first expected insight come to the might is the relationship between Revenue and Budget. We can assume that usually more budget to input into the movies, more expected revenue can gain. 
+
+In Figure 8-1, we plot the relationship of log-log scaled **Gross** and **Budget**. It illustrates a like-linear positive relationship between log(Gross) and log(Budget). Moreover, we plot the relationship of **Gross** and **Domestic_Gross**. It is similarly found that they have a positive relationship as states in Figure 8-2. 
+
+```{r}
+Q8 = Q7
+qplot(Q8$Gross, Q8$Budget, log='xy', 
+      main = "Figure 8-1: Trend of Gross on Budget", 
+      ylab = "log(Budget)",xlab="log(Gross)")+
+  stat_smooth()+theme_bw()
+
+qplot(Q8$Gross, Q8$Domestic_Gross, 
+      main = "Figure 8-1: Trend of Gross on Domestic_Gross", 
+      ylab = "Domestic_Gross",xlab="Gross")+
+  stat_smooth()+theme_bw()
+```
+
+We investigate correlation among them three. As image, they have very high positive correnlation as shown in the table and Figure 8-3.
+
+```{r}
+df8 = data.frame(Q8$Gross,Q8$Domestic_Gross, Q8$Budget)
+df8 = na.omit(df8)
+M8 = cor(df8)  
+M8           # Table
+ggpairs(df8,  columnLabels = c("Gross", "Domestic", "Budget"),
+        title="Figure 8-3: Corr of Gross, Domestic Gross & Budget")
+```
+
+#### 2. Expected: Is really movie with more **Language** has higher Revenue **Gross**?
+
+I think this is a intresting probelm for exploring. In common sense, if a movie translates into many languages, it may have more viewer and widely sales. This character should help on getting more revenue.
+
+In order to prove our assumption, we firstly remove "N/A" from **Q8$Language**. We create a new column named "countL" to save the count of langurages for movies as shown below.
+
+```{r}
+Q8$countL = 0
+Q8$Language[Q8$Language == "N/A"] = NA 
+Q8 = Q8[complete.cases(Q8[,11]),] 
+
+for (i in c(1:length(Q8$Language))){                     # i represent for row
+  Q8$countL[i] = length(strsplit(Q8$Language[i],',')[[1]])
+}
+head(Q8[c("Language", "countL")])     # Sample data
+```
+
+Then, we plot basic scatter plot and boxplot for **countL** and **Gross** as shown in Figure 8-3 and 8-4. It is not surprisely to see, even there are more single-langurage movies distributed on revenue, but the most profitable movies are those multiple language ones. With increase of numbers of langurage the revenue also increase.
+
+```{r}
+### Plot Gross and countL
+ggplot(Q8, aes(reorder(countL, -Gross, median), Gross))+
+  geom_boxplot()+
+  coord_flip()+
+  scale_x_discrete('countL')+theme_bw()+
+  labs(title = "Figure 8-3: Boxplot for Gross and countL")
+
+ggplot(data = Q8) + 
+  geom_point(mapping = aes(y = Gross, x = countL, color=Gross))+
+  theme_bw()+
+  labs(title = "Figure 8-4: Scatter Plot for Gross and countL")
+```
+
+In order to see more clearly, we aggregate the sum of Gross with different count-langurage movie types in **Q8n**. From Figure 8-5, we see an increasing trend from revenue on increasing number of movie langurages except for a sudden drop on **countL=8**. 
+
+Therefore, we proved our expectation on the relationship between **Language** and **Gross**.
+
+```{r}
+Q8n = aggregate(Q8$Gross, list(Q8$countL), mean)
+Q8n
+Q8n$Group.1 = factor(
+  Q8n$Group.1, levels = 1:9,
+  labels = c("One","Two","Three","Four","Five","Six",
+             "Seven","Eight","Nine"))
+
+ggplot(data=Q8n, aes(x=Group.1, y=x)) + geom_bar(stat="identity")+
+  xlab("Count of Languages of Movies") +ylab("Gross Revenue")+
+  labs(title = "Figure 8-5: Revenues Change with Count of Langurages")+
+  theme_bw()
+
+```
+
+#### 3. Unexpected: What relationship between number of **Country** and **Budget**?
+
+For the third problem, it is hard to say that if the movie will have higher budget than independent produced movies because of cooperating produced by multiple contries. In order to explore this confusing problem, we follow a similar logical method the second problem to answer it.
+
+From Figure 8-6, the distribution of aggregated budgets distribute in a mountain shape. It do not have clearly linear relation with Revenue. In Figure 8-7, 5-country joint produced movie could gain the most amount of budget; while larger than 7countries joint producing will gain smaal amount of budget.
+
+In terms of correlation, we compute the correlation of Budget, Revenue and Joint Countries, we notice that the correlations are very low between Countries and Budget/Revenue. 
+
+```{r}
+Q8$cc = 0
+Q8$Language[Q8$Language == "N/A"] = NA 
+Q8 = Q8[complete.cases(Q8[,11]),] 
+
+for (i in c(1:length(Q8$Country))){                     # i represent for row
+  Q8$cc[i] = length(strsplit(Q8$Country[i],',')[[1]])
+}
+head(Q8[c("Country", "cc")]) 
+
+Q8nn = aggregate(Q8$Budget, list(Q8$cc), mean)
+Q8nn
+
+ggplot(data=Q8nn, aes(x=Group.1, y=x)) + geom_bar(stat="identity")+
+  xlab("Count of Production Countries") +ylab("Movie Budget")+
+  labs(title = "Figure 8-6: Budget Change with Countries")+
+  theme_bw()
+
+ggplot(Q8, aes(reorder(cc, -Budget, median), Budget))+
+  geom_boxplot()+
+  coord_flip()+
+  scale_x_discrete('cc')+theme_bw()+
+  labs(title = "Figure 8-7: Boxplot for Budget and Countries")
+```
+
+```{r}
+df82 = data.frame(Q8$Gross,Q8$Budget,Q8$cc)
+ggpairs(df82,  columnLabels = c("Gross", "Budget", "Countries"),
+        title="Figure 8-8: Corr of Revenue, Budget and JointCountries")
+```
+
+
+
+
